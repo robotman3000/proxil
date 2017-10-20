@@ -20,10 +20,11 @@
 
 #define HTTPSHDRBUFSZ 256  // used for reading/writing HTTPS headers
 int VERBOSITY = 0; // Minimal
-const char* PROXY_HOST = "10.4.3.204";
+const char* PROXY_HOST = "192.168.64.1";
 const char* PROXY_PORT = "8080";
-const char* PORT = "1125";
+const char* PORT = "1234";
 int BACKLOG = 20;
+int httpVer = -1; // -2 is ignore; -1 Is unset; 0 is 1.0; 1 is 1.1
 #define BUFSZ 256
 
 void display_usage() {
@@ -119,12 +120,50 @@ int get_peername(int fd, char *dst, socklen_t dst_size) {
 void *pipe_data(void *arg) {
   int from_sock = ((int*)arg)[0];
   int to_sock = ((int*)arg)[1];
-  int l;
+  int mode = ((int*)arg)[2];
+  char* modeStr[2] = {
+      "C->P Send ................................",
+      "P->C Recv"
+  };
+  int l = 0;
+  int k = 0;
   //char *buf = (char*) malloc(BUFSZ);
   char buf[BUFSZ];
-  while ((l = recv(from_sock, buf, sizeof(buf), 0)) > 0)
-    if (send(to_sock, buf, l, 0) == -1)
+  printf("%s: Starting Reading\n", modeStr[mode]);
+  while ((l = recv(from_sock, buf, sizeof(buf), 0)) > 0){
+    printf("%s: Reading %d\n", modeStr[mode], l);
+    if (k = (send(to_sock, buf, l, 0)) == -1){
+      printf("%s: Breaking %d\n", modeStr[mode], k);
       break;
+    }
+    if(httpVer != -2){
+      if(mode == 0){ // If we are C->P
+        // Wait for the other thread to report http version
+        struct timespec tim, tim2;
+        tim.tv_sec  = 0;
+        tim.tv_nsec = 500000000L;
+        while (httpVer == -1){
+          printf("%s: waiting\n", modeStr[mode]);
+          if(nanosleep(&tim , &tim2) < 0 ) {
+            printf("Nano sleep system call failed \n");
+          }
+        }
+        if(httpVer == 0){
+          printf("%s: Breaking2 %d\n", modeStr[mode], k);
+          break;
+        }
+      } else {
+        // Detect and report http version
+        //printf("Debugg: %s", buf);
+        if(strncmp(buf, "HTTP/1.0 200", 12) <= 0){
+          httpVer = 0;
+        } else {
+          httpVer = 1;
+        }
+      }   
+    }
+  }
+  printf("%s: Ending Reading %d\n", modeStr[mode], l);
   //free(buf);
   return NULL;
 }
@@ -137,14 +176,14 @@ int wrap_https_connection(int proxy_fd, const char *dst_host, int dst_port) {
       dst_host, dst_port, dst_host);
   if (send(proxy_fd, buf, strlen(buf), 0) == -1) {
     if (VERBOSITY)
-      printf("Error writing to proxy connection");
+      printf("Error writing to https proxy connection\n");
     return -1;
   }
   recv(proxy_fd, buf, sizeof(buf), 0);
-  if (strncmp(buf, "HTTP/1.0 200", 12) != 0) {
+  if ((strncmp(buf, "HTTP/1.0 200", 12) != 0) && (strncmp(buf, "HTTP/1.1 200", 12) != 0)) {
     buf[sizeof(buf) - 1] = '\0';
     if (VERBOSITY)
-      printf("HTTPS wraping failed : %s\n", buf);
+      printf("HTTPS wrapping failed : %s\n", buf);
     return -1;
   }
   return 0;
@@ -175,30 +214,41 @@ void* handle_connection(void* sock_arg) {
   }
   if (VERBOSITY > 1)
     printf("Connection from %s:%d for %s:%d\n", peer_name, peer_port, dst_host, dst_port);
-
+  printf("0.-1\n");
   // Proxy Socket
   int psock = socket(proxy_servinfo->ai_family, proxy_servinfo->ai_socktype,
       proxy_servinfo->ai_protocol);
+  printf("0\n");
   if (connect(psock, proxy_servinfo->ai_addr, proxy_servinfo->ai_addrlen) != 0) {
+    printf("0.1\n");
     if (VERBOSITY)
       perror("Cannot connect to proxy server");
+    printf("0.2\n");
     close(sock);
+    printf("0.3\n");
     return NULL;
   }
-  if (wrap_https_connection(psock, dst_host, dst_port) == -1) {
-    close(psock);
-    close(sock);
-    return NULL;
+  printf("1\n");
+  if (dst_port == 443){
+    httpVer = -2;
+    if (wrap_https_connection(psock, dst_host, dst_port) == -1) {
+      close(psock);
+      close(sock);
+      return NULL;
+    }
   }
+  printf("2\n");
   pthread_t t1, t2;
-  int a[2][2]={
-    {sock, psock},
-    {psock, sock}
+  int a[2][3]={
+    {sock, psock, 0},
+    {psock, sock, 1}
   };
+  printf("Threading\n");
   pthread_create(&t1, NULL, pipe_data, (void*)(&a[0]));
   pthread_create(&t2, NULL, pipe_data, (void*)(&a[1]));
-  pthread_join(t1, NULL);
   pthread_join(t2, NULL);
+  printf("Waiting on final thread\n");
+  pthread_join(t1, NULL);
   close(psock);
   close(sock);
   if (VERBOSITY > 1)
@@ -291,3 +341,4 @@ int main(int argc, char **argv) {
   return 0;
 }
 
+ 

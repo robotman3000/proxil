@@ -13,7 +13,7 @@ import os
 import signal
 from socket import *
 import struct
-from dns import reversename, resolver
+import binascii
 
 logging.basicConfig()
 logger = logging.getLogger("proxy")
@@ -32,7 +32,7 @@ def pipe_data(s_from, s_to, strin):
             if len(data) == 0:
                 return
             s_to.send(data)
-            logger.info(strin + ": " + data)
+            logger.info(strin + ": " + binascii.hexlify(data))
     finally:
         try:
             s_from.shutdown(SHUT_RDWR)

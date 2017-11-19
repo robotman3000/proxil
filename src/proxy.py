@@ -21,8 +21,10 @@ PROXY_HOST = "192.168.0.1"
 PROXY_PORT = 8080
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 1234
-SERVER_CONN_BUFFER = 20
+SERVER_CONN_BUFFER = 200
 index = -1
+activeCount = 0
+activeLock = False
 
 SERVER_NAME_LEN = 256
 TLS_HEADER_LEN = 5
@@ -32,7 +34,7 @@ printBuffer = False
 
 def MIN(X, Y):
     return X if (X < Y) else Y
-
+    
 def getConnectionID():
     global index
     index += 1
@@ -53,6 +55,7 @@ class TCPSocketPipe:
         
     def _connectPipe(self, logStr, *args, **kwargs):
         try:
+            byteCount = 0
             while True:
                 #TODO: Add propper support for non-blocking reads and writes to the sockets
                 socketBuffer = self.sourceSocket.recv(2048)
@@ -76,14 +79,16 @@ class TCPSocketPipe:
                     if len(callbackBuffer) > 0:
                         logger.info(getStamp(self.connID) + logStr + " Sending callback data")
                         self.destSocket.send(callbackBuffer)
+                        byteCount += len(callbackBuffer)
                 
                 if bufferMode == 0 or bufferMode == 2:
                     if len(socketBuffer) > 0:
-                        logger.info(getStamp(self.connID) + logStr + " Sending socket data")
+                        #logger.info(getStamp(self.connID) + logStr + " Sending socket data")
                         self.destSocket.send(socketBuffer)
+                        byteCount += len(socketBuffer)
                         
                 if bufferMode == 3:
-                    logger.info(getStamp(self.connID) + logStr + " Not sending response: Code: %d" % bufferMode)
+                    logger.info(getStamp(self.connID) + logStr + " Not sending response: Code: %d \n {\n %s \n} \n {\n %s \n}" % (bufferMode, callbackBuffer, socketBuffer))
                     
         except BaseException as e:
             logger.info(getStamp(self.connID) + logStr + " Socket Pipe Exception: " + str(e))
@@ -100,6 +105,7 @@ class TCPSocketPipe:
                 self.destSocket.close()
             except BaseException as e:
                 logger.info(getStamp(self.connID) + logStr + " Exception while closing destination socket: " + str(e))
+            logger.info(getStamp(self.connID) + logStr + " Transfered %d Bytes" % byteCount)
             
     def setCallback(self, callback):
         self.callback = callback

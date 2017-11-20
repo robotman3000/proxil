@@ -8,20 +8,15 @@ iptables -t nat -A OUTPUT -d 192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,127.0.0.1 -
 iptables -t nat -A OUTPUT -p tcp --dport 80 -j DNAT --to 127.0.0.1:1234
 iptables -t nat -A OUTPUT -p tcp --dport 443 -j DNAT --to 127.0.0.1:1234
 """
-import logging, threading, os, signal, struct, binascii, sys
+import logging, threading, os, signal, struct, binascii, sys, argparse
 import time as time
 from socket import *
 from datetime import datetime
 
 logging.basicConfig()
 logger = logging.getLogger("proxy")
-logger.setLevel(logging.DEBUG)
 SO_ORIGINAL_DST = 80
-PROXY_HOST = "192.168.0.1"
-PROXY_PORT = 8080
-SERVER_HOST = "0.0.0.0"
-SERVER_PORT = 1234
-SERVER_CONN_BUFFER = 200
+SERVER_CONN_BUFFER = 512
 index = -1
 activeCount = 0
 activeLock = False
@@ -30,7 +25,6 @@ SERVER_NAME_LEN = 256
 TLS_HEADER_LEN = 5
 TLS_HANDSHAKE_CONTENT_TYPE = 0x16 # hex
 TLS_HANDSHAKE_TYPE_CLIENT_HELLO = 0x01
-printBuffer = False
 
 def MIN(X, Y):
     return X if (X < Y) else Y
@@ -52,60 +46,81 @@ class TCPSocketPipe:
         self.thread = None
         self.sourceSocket.setblocking(readWillBlock)
         self.destSocket.setblocking(writeWillBlock)
+        self.waitCount = 0
+        self.writeDone = False
+        self.readDone = True
         
     def _connectPipe(self, logStr, *args, **kwargs):
         try:
             byteCount = 0
             while True:
-                #TODO: Add propper support for non-blocking reads and writes to the sockets
-                socketBuffer = self.sourceSocket.recv(2048)
-                callbackBuffer = []
-                bufferMode = 0
-                if self.callback is not None:
-                    callbackResult = self.callback(socketBuffer)
-                    callbackBuffer = callbackResult.data
-                    bufferMode = callbackResult.result
-                    if bufferMode == -1:
-                        logger.info(getStamp(self.connID) + logStr + " : Callback reported a failure; Closing Pipe")
-                        break
-                
-                if len(socketBuffer) == 0 and len(callbackBuffer) == 0:
-                    logger.info(getStamp(self.connID) + logStr + " : Callback and Socket buffers were empty; Closing Pipe")
-                    break
-                
-                # Send callback data first then send our data
-                # so that any data we inject takes presidence
-                if bufferMode == 0 or bufferMode == 1:
-                    if len(callbackBuffer) > 0:
-                        logger.info(getStamp(self.connID) + logStr + " Sending callback data")
-                        self.destSocket.send(callbackBuffer)
-                        byteCount += len(callbackBuffer)
-                
-                if bufferMode == 0 or bufferMode == 2:
-                    if len(socketBuffer) > 0:
-                        #logger.info(getStamp(self.connID) + logStr + " Sending socket data")
-                        self.destSocket.send(socketBuffer)
-                        byteCount += len(socketBuffer)
-                        
-                if bufferMode == 3:
-                    logger.info(getStamp(self.connID) + logStr + " Not sending response: Code: %d \n {\n %s \n} \n {\n %s \n}" % (bufferMode, callbackBuffer, socketBuffer))
+                try:
+                    #TODO: Finish propper support for non-blocking reads and writes to the sockets
+                    socketBuffer = self.sourceSocket.recv(2048)
+                    if self.waitCount > 0: self.waitCount -= 1
+                    callbackBuffer = []
+                    bufferMode = 0
+                    if self.callback is not None:
+                        callbackResult = self.callback(socketBuffer)
+                        callbackBuffer = callbackResult.data
+                        bufferMode = callbackResult.result
+                        if bufferMode == -1:
+                            logger.info(getStamp(self.connID) + logStr + " : Callback reported a failure; Closing Pipe")
+                            break
                     
+                    if len(socketBuffer) == 0 and len(callbackBuffer) == 0:
+                        logger.info(getStamp(self.connID) + logStr + " : Callback and Socket buffers were empty; Closing Pipe")
+                        break
+                    
+                    # Send callback data first then send our data
+                    # so that any data we inject takes presidence
+                    if bufferMode == 0 or bufferMode == 1:
+                        if len(callbackBuffer) > 0:
+                            logger.debug(getStamp(self.connID) + logStr + " Sending callback data")
+                            self.destSocket.send(callbackBuffer)
+                            byteCount += len(callbackBuffer)
+                            if self.waitCount > 0: self.waitCount -= 1
+                    
+                    if bufferMode == 0 or bufferMode == 2:
+                        if len(socketBuffer) > 0:
+                            logger.debug(getStamp(self.connID) + logStr + " Sending socket data")
+                            self.destSocket.send(socketBuffer)
+                            byteCount += len(socketBuffer)
+                            if self.waitCount > 0: self.waitCount -= 1
+                            
+                    if bufferMode == 3:
+                        leng = len("HTTP/1.0 200 Connection established\r\n\r\n")
+                        if len(socketBuffer) > leng:
+                            logger.debug(getStamp(self.connID) + logStr + " Sending socket data22")
+                            self.destSocket.send(socketBuffer[leng:])
+                            print(socketBuffer[leng:])
+                            byteCount += len(socketBuffer[leng:])
+                            if self.waitCount > 0: self.waitCount -= 1
+                        else:
+                            logger.info(getStamp(self.connID) + logStr + " Not sending response: Code: %d \n {\n %s \n} \n {\n %s \n}" % (bufferMode, callbackBuffer, socketBuffer))
+                except BlockingIOError as e:
+                    logger.info(getStamp(self.connID) + logStr + " Waiting " + str(self.waitCount) + ": " + str(e))
+                    time.sleep(0.1)
+                    if self.waitCount < 50:
+                        self.waitCount += 1
+                    else:
+                        break
         except BaseException as e:
-            logger.info(getStamp(self.connID) + logStr + " Socket Pipe Exception: " + str(e))
+            logger.warning(getStamp(self.connID) + logStr + " Socket Pipe Exception: " + str(e))
         finally:
             try:
-                logger.info(getStamp(self.connID) + "Closing the source socket")
+                logger.debug(getStamp(self.connID) + "Closing the source socket")
                 self.sourceSocket.shutdown(SHUT_RDWR)
                 self.sourceSocket.close()
             except BaseException as e:
-                logger.info(getStamp(self.connID) + logStr + " Exception while closing source socket: " + str(e))
+                logger.warning(getStamp(self.connID) + logStr + " Exception while closing source socket: " + str(e))
             try:
-                logger.info(getStamp(self.connID) + "Closing the dest socket")
+                logger.debug(getStamp(self.connID) + "Closing the dest socket")
                 self.destSocket.shutdown(SHUT_RDWR)
                 self.destSocket.close()
             except BaseException as e:
-                logger.info(getStamp(self.connID) + logStr + " Exception while closing destination socket: " + str(e))
-            logger.info(getStamp(self.connID) + logStr + " Transfered %d Bytes" % byteCount)
+                logger.warning(getStamp(self.connID) + logStr + " Exception while closing destination socket: " + str(e))
+            logger.debug(getStamp(self.connID) + logStr + " Transfered %d Bytes" % byteCount)
             
     def setCallback(self, callback):
         self.callback = callback
@@ -130,8 +145,7 @@ class CallbackStatus:
     
 class HTTPProxyTunnel:
     def clientCallback(self, data):
-        if printBuffer:
-            logger.info(getStamp(self.connID) + "C->P: {\n %s \n}" % data)
+        logger.debug(getStamp(self.connID) + "C->P: {\n %s \n}" % data)
             
         if self.cFirst and len(data) > 0:
             self.cFirst = False
@@ -146,7 +160,7 @@ class HTTPProxyTunnel:
                     elif hostname == -2:
                         errStr = "No Host header included in this request"
                         
-                    logger.info(getStamp(self.connID) + "(%d) Failed to read SNI name: %s" % (hostname, errStr))
+                    logger.error(getStamp(self.connID) + "(%d) Failed to read SNI name: %s" % (hostname, errStr))
                         
                     return CallbackStatus(-1)
                 else:                
@@ -160,16 +174,14 @@ class HTTPProxyTunnel:
         return CallbackStatus(2)
         
     def proxyCallback(self, data):
-        if printBuffer:
-            logger.info(getStamp(self.connID) + "P->C: {\n %s \n}" % data)
+        logger.debug(getStamp(self.connID) + "P->C: {\n %s \n}" % data)
             
         callbackCode = 0
         if self.pFirst and len(data) > 0:
             self.pFirst = False
             if self.connectSent is not None and data.startswith(str.encode("HTTP/1.0 4")) or data.startswith(str.encode("HTTP/1.1 4")): #TODO: These 4* 's might need to become 200's
-                logger.info(getStamp(self.connID) + "Failed to wrap connection!")
-                if not printBuffer:
-                    logger.info(getStamp(self.connID) + "Upstream Proxy Responded With: P->C: {\n %s \n}" % data)
+                logger.error(getStamp(self.connID) + "Failed to wrap connection!")
+                logger.error(getStamp(self.connID) + "Upstream Proxy Responded With: P->C: {\n %s \n}" % data)
                 callbackCode = -1
             else:
                 logger.info(getStamp(self.connID) + "Successfully wrapped connection")
@@ -202,14 +214,14 @@ class HTTPProxyTunnel:
         
         tls_content_type = data[0]
         if tls_content_type != TLS_HANDSHAKE_CONTENT_TYPE:
-            print("Request did not begin with TLS handshake.\n")
+            logger.error("Request did not begin with TLS handshake.")
             return -5
         
         tls_version_major = data[1]
         tls_version_minor = data[2]
         
         if tls_version_major < 3:
-            print("Received SSL %d.%d handshake which can not support SNI.\n" % tls_version_major, tls_version_minor)
+            logger.error("Received SSL %d.%d handshake which can not support SNI." % tls_version_major, tls_version_minor)
             return -2
         
         #/* TLS record length */
@@ -223,7 +235,7 @@ class HTTPProxyTunnel:
         if index + 1 > data_len: return -5
 
         if data[index] != TLS_HANDSHAKE_TYPE_CLIENT_HELLO:
-            print("Not a client hello\n")
+            logger.error("Not a client hello")
             return -5
 
         #/* Skip past fixed length records:
@@ -254,7 +266,7 @@ class HTTPProxyTunnel:
         index += 1 + tls_len
 
         if index == data_len and tls_version_major == 3 and tls_version_minor == 0:
-            print("Received SSL 3.0 handshake without extensions\n")
+            logger.error("Received SSL 3.0 handshake without extensions")
             return -2
 
         #/* Extensions */
@@ -301,7 +313,7 @@ class HTTPProxyTunnel:
                 
                 return "".join(map(chr, hostnm)) # Convert to a string
             else:
-                print("Unknown server name extension name type: %d\n" % data[index])
+                logger.debug("Unknown server name extension name type: %d" % data[index])
             index += 3 + sni_len
         
         #/* Check we ended where we expected to */
@@ -316,10 +328,10 @@ class HTTPProxyTunnel:
         self.pFirst = True
         self.cFirst = True
     
-        self.clientProxyPipe = TCPSocketPipe(clientSocket, proxySocket, connID) 
+        self.clientProxyPipe = TCPSocketPipe(clientSocket, proxySocket, connID, False, False) 
         self.clientProxyPipe.setCallback(self.clientCallback)
         
-        self.proxyClientPipe = TCPSocketPipe(proxySocket, clientSocket, connID)
+        self.proxyClientPipe = TCPSocketPipe(proxySocket, clientSocket, connID, False, False)
         self.proxyClientPipe.setCallback(self.proxyCallback)
     
     def runTunnel(self, fallbackIP, port):
@@ -346,29 +358,69 @@ class HTTPProxyTunnel:
         
         # Wait on the pipes
         self.clientProxyPipe.join()
-        logger.info(getStamp(self.connID) + "Closed the Client -> Proxy socket pipe")
+        logger.debug(getStamp(self.connID) + "Closed the Client -> Proxy socket pipe")
         self.proxyClientPipe.join()
-        logger.info(getStamp(self.connID) + "Closed the Proxy -> Client socket pipe")
+        logger.debug(getStamp(self.connID) + "Closed the Proxy -> Client socket pipe")
 
 def main():
+    args = parseOptions()
+    configureLogging(args)
     pid = os.getpid()
     s = socket(AF_INET, SOCK_STREAM)
     s.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-    s.bind((SERVER_HOST, SERVER_PORT))
+    s.bind((args.listen_ip, args.listen_port))
     s.listen(SERVER_CONN_BUFFER)
-    logger.info(getStamp(-1) + "pid:%d , Listening on %d", pid, SERVER_PORT)
+    logger.info(getStamp(-1) + "pid:%d , Listening on %s:%d", pid, args.listen_ip, args.listen_port)
+    #print("Log Level: %d" % logger.getEffectiveLevel())
     
     while True:
         try:
             conn, addr = s.accept()
-            threading.Thread(target=handle_connection, args=(conn, addr,)).start()
+            #handle_connection(conn, addr, args.dest_ip, args.dest_port) # This is single thread mode
+            #TODO: Keep track to the started threads for resource management and record keeping
+            threading.Thread(target=handle_connection, args=(conn, addr, args.dest_ip, args.dest_port)).start() # This is multi-thread mode
         except KeyboardInterrupt:
             os.kill(pid, signal.SIGKILL)
     
-def handle_connection(s, addr):
+def parseOptions():
+    parser = argparse.ArgumentParser(prog='PROG', usage='%(prog)s [options]')
+    parser.add_argument('--verbose', '-v', action='count', dest="logLevel", default=0, help='The higher the value the more verbose. 0 is the same as --quiet')
+    parser.add_argument('--quiet', '-q', action='store_true', dest="isQuiet", default=False, help='Disables all output')
+    parser.add_argument('--show-errors', '-e', action='store_true', dest="showErrors", default=False, help='Print\'s errors even if quiet is enabled')
+    parser.add_argument('--listen-ip', '-a', type=str, default="0.0.0.0", help='The IP Address to listen on')
+    parser.add_argument('--listen-port', '-p', type=int, default=1234, help='The port to listen on')
+    parser.add_argument('--dest-ip', '-d', type=str, default="proxy.example.com", help='The address of the HTTP proxy to tunnel connections with')
+    parser.add_argument('--dest-port', '-P', type=int, default=8080, help='The port of the HTTP proxy to tunnel connections with')
+    
+    args = parser.parse_args()
+    #print(args)
+    return args
+    
+def configureLogging(args):
+    if args.showErrors:
+        # set logger to 40 to show crit and error
+        logger.setLevel(logging.ERROR)
+        
+    if args.logLevel > 1:
+        # set logger to 10
+        logger.setLevel(logging.DEBUG)
+    
+    elif args.logLevel > 0:
+        # set logger to 20
+        logger.setLevel(logging.INFO)
+        
+    #elif args.logLevel > 0:
+        # set logger to 30
+    #    logger.setLevel(logging.WARNING)
+    
+    if args.isQuiet:
+        # set logger to 60
+        logger.setLevel(60)
+    
+def handle_connection(s, addr, proxyIP, proxyPort):
     try:
         proxy_s = socket(AF_INET, SOCK_STREAM)
-        proxy_s.connect((PROXY_HOST, PROXY_PORT))
+        proxy_s.connect((proxyIP, proxyPort))
         dst = s.getsockopt(SOL_IP, SO_ORIGINAL_DST, 16)
         srv_port, srv_ip = struct.unpack("!2xH4s8x", dst)
         srv_host = inet_ntoa(srv_ip)
@@ -379,15 +431,15 @@ def handle_connection(s, addr):
         logger.info(getStamp(connID) + "%s:%d Terminated", srv_host, srv_port)
     finally:
         try:
-            logger.info(getStamp(connID) + "Closing the Proxy Socket")
+            logger.debug(getStamp(connID) + "Closing the Proxy Socket")
             proxy_s.close()
         except error:
             pass
         try:
-            logger.info(getStamp(connID) + "Closing the Client Socket")
+            logger.debug(getStamp(connID) + "Closing the Client Socket")
             s.close()
         except error:
             pass
-        logger.info(getStamp(connID) + "Ended connection %d", connID)
+        logger.debug(getStamp(connID) + "Ended connection %d", connID)
 
 main()

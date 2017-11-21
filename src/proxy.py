@@ -76,7 +76,7 @@ class TCPSocketPipe:
                     # so that any data we inject takes presidence
                     if bufferMode == 0 or bufferMode == 1:
                         if len(callbackBuffer) > 0:
-                            logger.debug(getStamp(self.connID) + logStr + " Sending callback data")
+                            logger.debug(getStamp(self.connID) + logStr + " Sending callback data: %s" % callbackBuffer)
                             self.destSocket.send(callbackBuffer)
                             byteCount += len(callbackBuffer)
                             if self.waitCount > 0: self.waitCount -= 1
@@ -93,7 +93,7 @@ class TCPSocketPipe:
                         if len(socketBuffer) > leng:
                             logger.debug(getStamp(self.connID) + logStr + " Sending socket data22")
                             self.destSocket.send(socketBuffer[leng:])
-                            print(socketBuffer[leng:])
+                            #print(socketBuffer[leng:])
                             byteCount += len(socketBuffer[leng:])
                             if self.waitCount > 0: self.waitCount -= 1
                         else:
@@ -104,6 +104,7 @@ class TCPSocketPipe:
                     if self.waitCount < 50:
                         self.waitCount += 1
                     else:
+                        pass
                         break
         except BaseException as e:
             logger.warning(getStamp(self.connID) + logStr + " Socket Pipe Exception: " + str(e))
@@ -170,6 +171,30 @@ class HTTPProxyTunnel:
                     connectStr = str.encode(https_conn)
                     self.connectSent = True
                     return CallbackStatus(0, connectStr)
+    
+        if self.connectSent is None: # We are using HTTP
+            domain = ""
+            res = "".join(map(chr, data)).split("\r\n")
+            for i in res:
+                #print("2 %s" % i)
+                if i.startswith("Host: "):
+                    domain = i[6:]
+                    break
+            res2 = res[0].split(" ")
+            if res2[0].startswith("GET") or res2[0].startswith("POST"): #TODO: Add the rest
+                res2[1] = "http://" + domain + res2[1]
+            #print(res2[1])
+            res[0] = " ".join(res2)
+            #print(res)
+            strin = ""
+            ind = 0
+            for i in res:
+                strin += i
+                if ind < (len(res) - 1):
+                    strin += "\r\n"
+                    ind += 1
+            
+            return CallbackStatus(1, str.encode(strin))
                 
         return CallbackStatus(2)
         
@@ -179,7 +204,8 @@ class HTTPProxyTunnel:
         callbackCode = 0
         if self.pFirst and len(data) > 0:
             self.pFirst = False
-            if self.connectSent is not None and data.startswith(str.encode("HTTP/1.0 4")) or data.startswith(str.encode("HTTP/1.1 4")): #TODO: These 4* 's might need to become 200's
+            #print(self.connectSent)
+            if self.connectSent is not None and (data.startswith(str.encode("HTTP/1.0 4")) or data.startswith(str.encode("HTTP/1.1 4"))): #TODO: These 4* 's might need to become 200's
                 logger.error(getStamp(self.connID) + "Failed to wrap connection!")
                 logger.error(getStamp(self.connID) + "Upstream Proxy Responded With: P->C: {\n %s \n}" % data)
                 callbackCode = -1
@@ -328,10 +354,10 @@ class HTTPProxyTunnel:
         self.pFirst = True
         self.cFirst = True
     
-        self.clientProxyPipe = TCPSocketPipe(clientSocket, proxySocket, connID, False, False) 
+        self.clientProxyPipe = TCPSocketPipe(clientSocket, proxySocket, connID, True, True) 
         self.clientProxyPipe.setCallback(self.clientCallback)
         
-        self.proxyClientPipe = TCPSocketPipe(proxySocket, clientSocket, connID, False, False)
+        self.proxyClientPipe = TCPSocketPipe(proxySocket, clientSocket, connID, True, True)
         self.proxyClientPipe.setCallback(self.proxyCallback)
     
     def runTunnel(self, fallbackIP, port):
@@ -378,7 +404,10 @@ def main():
             conn, addr = s.accept()
             #handle_connection(conn, addr, args.dest_ip, args.dest_port) # This is single thread mode
             #TODO: Keep track to the started threads for resource management and record keeping
-            threading.Thread(target=handle_connection, args=(conn, addr, args.dest_ip, args.dest_port)).start() # This is multi-thread mode
+            thrd = threading.Thread(target=handle_connection, args=(conn, addr, args.dest_ip, args.dest_port))
+            thrd.start() # This is multi-thread mode
+            #threads.append(thrd)
+            
         except KeyboardInterrupt:
             os.kill(pid, signal.SIGKILL)
     

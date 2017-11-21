@@ -1,7 +1,7 @@
 Transparent Proxy
 =================
 
-This repository contains files relevant for setting up a transparent proxy for HTTP and HTTPS over a DD-WRT by forwarding requests to a secondary HTTP proxy.
+This repository contains files relevant for setting up a transparent proxy for HTTP and HTTPS by forwarding requests to a secondary HTTP proxy.
 
 This setup can work on any Linux distributions, but the files here are aimed towards a router running DD-WRT , specifically on the Atheros MIPS architecture.
 

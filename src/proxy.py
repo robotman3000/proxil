@@ -399,14 +399,28 @@ def main():
     logger.info(getStamp(-1) + "pid:%d , Listening on %s:%d", pid, args.listen_ip, args.listen_port)
     #print("Log Level: %d" % logger.getEffectiveLevel())
     
+    threads = []
+    newThreadCount = 0
     while True:
         try:
             conn, addr = s.accept()
             #handle_connection(conn, addr, args.dest_ip, args.dest_port) # This is single thread mode
-            #TODO: Keep track to the started threads for resource management and record keeping
+            
+            # Clean up old threads before we add new ones
+            
+            if newThreadCount > 10:
+                logger.debug(getStamp(self.connID) + "Cleaning up dead threads")
+                newThreadCount = 0
+                for t in threads:
+                    if not t.isAlive():
+                        logger.debug(getStamp(self.connID) + "Removing Thread %s" % t.getName())
+                        threads.remove(t)
+            
             thrd = threading.Thread(target=handle_connection, args=(conn, addr, args.dest_ip, args.dest_port))
             thrd.start() # This is multi-thread mode
-            #threads.append(thrd)
+            threads.append(thrd)
+            newThreadCount += 1
+            
             
         except KeyboardInterrupt:
             os.kill(pid, signal.SIGKILL)
@@ -458,16 +472,18 @@ def handle_connection(s, addr, proxyIP, proxyPort):
         logger.info(getStamp(connID) + "Intercepted connection to %s:%d from %s", srv_host, srv_port, addr)
         HTTPProxyTunnel(s, proxy_s, connID).runTunnel(srv_host, srv_port)
         logger.info(getStamp(connID) + "%s:%d Terminated", srv_host, srv_port)
+    except BaseException as e:
+        logger.warning(getStamp(connID) + " Exception while handling connection: " + str(e))
     finally:
         try:
             logger.debug(getStamp(connID) + "Closing the Proxy Socket")
             proxy_s.close()
-        except error:
+        except BaseException as e:
             pass
         try:
             logger.debug(getStamp(connID) + "Closing the Client Socket")
             s.close()
-        except error:
+        except BaseException as e:
             pass
         logger.debug(getStamp(connID) + "Ended connection %d", connID)
 

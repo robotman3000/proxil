@@ -20,6 +20,7 @@ SERVER_CONN_BUFFER = 512
 index = -1
 activeCount = 0
 activeLock = False
+printData = False
 
 SERVER_NAME_LEN = 256
 TLS_HEADER_LEN = 5
@@ -51,6 +52,7 @@ class TCPSocketPipe:
         self.readDone = True
         
     def _connectPipe(self, logStr, *args, **kwargs):
+        global printData
         try:
             byteCount = 0
             while True:
@@ -76,14 +78,16 @@ class TCPSocketPipe:
                     # so that any data we inject takes presidence
                     if bufferMode == 0 or bufferMode == 1:
                         if len(callbackBuffer) > 0:
-                            logger.debug(getStamp(self.connID) + logStr + " Sending callback data: %s" % callbackBuffer)
+                            if printData:
+                                logger.debug(getStamp(self.connID) + logStr + " Sending callback data: %s" % callbackBuffer)
                             self.destSocket.send(callbackBuffer)
                             byteCount += len(callbackBuffer)
                             if self.waitCount > 0: self.waitCount -= 1
                     
                     if bufferMode == 0 or bufferMode == 2:
                         if len(socketBuffer) > 0:
-                            logger.debug(getStamp(self.connID) + logStr + " Sending socket data")
+                            if printData:
+                                logger.debug(getStamp(self.connID) + logStr + " Sending socket data")
                             self.destSocket.send(socketBuffer)
                             byteCount += len(socketBuffer)
                             if self.waitCount > 0: self.waitCount -= 1
@@ -91,7 +95,8 @@ class TCPSocketPipe:
                     if bufferMode == 3:
                         leng = len("HTTP/1.0 200 Connection established\r\n\r\n")
                         if len(socketBuffer) > leng:
-                            logger.debug(getStamp(self.connID) + logStr + " Sending socket data22")
+                            if printData:
+                                logger.debug(getStamp(self.connID) + logStr + " Sending modified socket data")
                             self.destSocket.send(socketBuffer[leng:])
                             #print(socketBuffer[leng:])
                             byteCount += len(socketBuffer[leng:])
@@ -146,7 +151,9 @@ class CallbackStatus:
     
 class HTTPProxyTunnel:
     def clientCallback(self, data):
-        logger.debug(getStamp(self.connID) + "C->P: {\n %s \n}" % data)
+        global printData
+        if printData:
+            logger.debug(getStamp(self.connID) + "C->P: {\n %s \n}" % data)
             
         if self.cFirst and len(data) > 0:
             self.cFirst = False
@@ -199,7 +206,9 @@ class HTTPProxyTunnel:
         return CallbackStatus(2)
         
     def proxyCallback(self, data):
-        logger.debug(getStamp(self.connID) + "P->C: {\n %s \n}" % data)
+        global printData
+        if printData:
+            logger.debug(getStamp(self.connID) + "P->C: {\n %s \n}" % data)
             
         callbackCode = 0
         if self.pFirst and len(data) > 0:
@@ -408,15 +417,16 @@ def main():
             
             # Clean up old threads before we add new ones
             
-            if newThreadCount > 10:
-                logger.debug(getStamp(self.connID) + "Cleaning up dead threads")
+            if newThreadCount > 20:
+                logger.debug(getStamp(-1) + "Cleaning up dead threads")
                 newThreadCount = 0
                 for t in threads:
                     if not t.isAlive():
-                        logger.debug(getStamp(self.connID) + "Removing Thread %s" % t.getName())
+                        logger.debug(getStamp(-1) + "Removing Thread %s" % t.getName())
                         threads.remove(t)
             
-            thrd = threading.Thread(target=handle_connection, args=(conn, addr, args.dest_ip, args.dest_port))
+            connID = getConnectionID()
+            thrd = threading.Thread(target=handle_connection, args=(conn, addr, args.dest_ip, args.dest_port, connID), name=("Connection-%d" % connID))
             thrd.start() # This is multi-thread mode
             threads.append(thrd)
             newThreadCount += 1
@@ -440,10 +450,14 @@ def parseOptions():
     return args
     
 def configureLogging(args):
+    global printData
     if args.showErrors:
         # set logger to 40 to show crit and error
         logger.setLevel(logging.ERROR)
-        
+    
+    if args.logLevel > 2:
+        printData = True
+    
     if args.logLevel > 1:
         # set logger to 10
         logger.setLevel(logging.DEBUG)
@@ -458,9 +472,10 @@ def configureLogging(args):
     
     if args.isQuiet:
         # set logger to 60
+        printData = False
         logger.setLevel(60)
     
-def handle_connection(s, addr, proxyIP, proxyPort):
+def handle_connection(s, addr, proxyIP, proxyPort, connID):
     try:
         proxy_s = socket(AF_INET, SOCK_STREAM)
         proxy_s.connect((proxyIP, proxyPort))
@@ -468,7 +483,6 @@ def handle_connection(s, addr, proxyIP, proxyPort):
         srv_port, srv_ip = struct.unpack("!2xH4s8x", dst)
         srv_host = inet_ntoa(srv_ip)
         
-        connID = getConnectionID()
         logger.info(getStamp(connID) + "Intercepted connection to %s:%d from %s", srv_host, srv_port, addr)
         HTTPProxyTunnel(s, proxy_s, connID).runTunnel(srv_host, srv_port)
         logger.info(getStamp(connID) + "%s:%d Terminated", srv_host, srv_port)

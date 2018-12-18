@@ -32,15 +32,18 @@ std::atomic<int> tlsResult; // -255 is unset
 std::atomic<char*> hostname1;
 #define BUFSZ 256
 
-static int parse_tls_header(const char *, size_t, char **);
+static int parse_tls_header(const char *, size_t, char **, bool);
 static int parse_extensions(const char *, size_t, char **);
 static int parse_server_name_extension(const char *, size_t, char **);
 
+class test {
+
+};
+
 void display_usage() {
 	printf("tproxy: Intermediate transparent HTTPS proxy\n");
-	printf(
-			"Usage : ./tproxy [-h] [-v] -h proxy_host -a proxy_port -p tproxy_port "
-					"\n");
+	printf("Usage : ./tproxy [-h] [-v] -h proxy_host -a proxy_port -p tproxy_port "
+			"\n");
 	printf("Written by Anish Shankar <rndanish@gmail.com> , "
 			"http://phinfinity.com\n");
 	printf("Before running this add iptables rules to intercept packets and "
@@ -50,19 +53,15 @@ void display_usage() {
 	// tproxy_port -b
 	// buffer_size\n");
 	printf("\t -h/-?\t-  Print help and this usage information\n");
-	printf(
-			"\t -v\t- Verbosity. Specify once to display error messages, twice to "
-					"display all "
-					"connection information\n");
+	printf("\t -v\t- Verbosity. Specify once to display error messages, twice to "
+			"display all "
+			"connection information\n");
 	printf("\t -s\t- Proxy Host. hostname of secondary proxy server to use. "
 			"defaults to : %s\n", PROXY_HOST);
-	printf(
-			"\t -a\t- Proxy Port. Port number of proxy service. defaults to : %s\n",
-			PROXY_PORT);
-	printf(
-			"\t -p\t- Tproxy Port. Port that tproxy should run intermedeate proxy "
-					"on. defaults to : "
-					"%s\n", PORT);
+	printf("\t -a\t- Proxy Port. Port number of proxy service. defaults to : %s\n", PROXY_PORT);
+	printf("\t -p\t- Tproxy Port. Port that tproxy should run intermedeate proxy "
+			"on. defaults to : "
+			"%s\n", PORT);
 	//  printf("\t -b\t- Buffer Size. Buffer Size used to transfer packets.
 	//  defaults to : %d\n",
 	//  BUFSZ);
@@ -75,24 +74,24 @@ void parse_commandline(int argc, char** argv) {
 	int opt = getopt(argc, argv, optstring);
 	while (opt != -1) {
 		switch (opt) {
-		case 'p':
-			PORT = optarg;
-			break;
-		case 's':
-			PROXY_HOST = optarg;
-			break;
-		case 'a':
-			PROXY_PORT = optarg;
-			break;
-		case 'v':
-			VERBOSITY++;
-			break;
-		case 'h':
-		case '?':
-			display_usage();
-			break;
-		default:
-			break;
+			case 'p':
+				PORT = optarg;
+				break;
+			case 's':
+				PROXY_HOST = optarg;
+				break;
+			case 'a':
+				PROXY_PORT = optarg;
+				break;
+			case 'v':
+				VERBOSITY++;
+				break;
+			case 'h':
+			case '?':
+				display_usage();
+				break;
+			default:
+				break;
 		}
 		opt = getopt(argc, argv, optstring);
 	}
@@ -118,12 +117,12 @@ int get_addr_name(struct sockaddr* sa, char* dst, socklen_t dst_size) {
 		return -1;
 	return port;
 }
+
 // Returns port (-1 on error), Human readable IP through dst
 int get_original_dst(int fd, char* dst, socklen_t dst_size) {
 	struct sockaddr_storage addr;
 	socklen_t addr_len = sizeof(addr);
-	if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, (struct sockaddr*) &addr,
-			&addr_len) == -1)
+	if (getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, (struct sockaddr*) &addr, &addr_len) == -1)
 		return -1;
 	int port = get_addr_name((struct sockaddr*) &addr, dst, dst_size);
 	if (port == -1)
@@ -131,6 +130,7 @@ int get_original_dst(int fd, char* dst, socklen_t dst_size) {
 	// For some reason ^ above doesn't give correct port chk later
 	return port;
 }
+
 // Returns port (-1 on error), Human readable IP through dst
 int get_peername(int fd, char* dst, socklen_t dst_size) {
 	struct sockaddr_storage addr;
@@ -147,8 +147,7 @@ void* pipe_data(void* arg) {
 	int from_sock = ((int*) arg)[0];
 	int to_sock = ((int*) arg)[1];
 	int mode = ((int*) arg)[2];
-	char* modeStr[2] = { (char*) "C->P Send ................................",
-			(char*) "P->C Recv" };
+	char* modeStr[2] = { (char*) "C->P Send ................................", (char*) "P->C Recv" };
 	int l = 0;
 	int k = 0;
 
@@ -164,7 +163,7 @@ void* pipe_data(void* arg) {
 	while ((l = recv(from_sock, buf, sizeof(buf), 0)) > 0) {
 		printf("%s: Reading %d\n", modeStr[mode], l);
 
-		if(mode == 0){
+		if (mode == 0) {
 			// Rezise packet buffer
 			printf("hashedChars: ");
 			tempBuf1 = new char[packetSize + l];
@@ -180,31 +179,48 @@ void* pipe_data(void* arg) {
 			}
 			printf("\n");
 			/*if(packet != NULL){
-				delete[] packet;
-			}*/
+			 delete[] packet;
+			 }*/
 
 			delete[] packet;
 			packet = new char[packetSize + l];
 			packetSize = l + packetSize;
-			for(int i = 0; i < packetSize; i++){
+			for (int i = 0; i < packetSize; i++) {
 				packet[i] = tempBuf1[i];
 			}
 
 			delete[] tempBuf1;
 			//packet = tempBuf1;
+
 		}
 
-
 		/*printf("hashedChars1: ");
-		for (int i = 0; i < packetSize; i++) {
-		  printf(" \'%c\' ", packet[i]);
-		  if((i % 16) == 0){
-			  printf("\n");
-		  }
-		}*/
-		if (k = (send(to_sock, buf, l, 0)) == -1) {
-			printf("%s: Breaking %d\n", modeStr[mode], k);
-			break;
+		 for (int i = 0; i < packetSize; i++) {
+		 printf(" \'%c\' ", packet[i]);
+		 if((i % 16) == 0){
+		 printf("\n");
+		 }
+		 }*/
+		if (mode == 0 && tlsResult != -255) {
+			if ((k = (send(to_sock, buf, l, 0))) == -1) {
+				printf("%s: Breaking %d\n", modeStr[mode], k);
+				break;
+			}
+		}
+
+		if (mode == 0 && tlsResult == -255) {
+			char* hostname;
+			int result = parse_tls_header(packet, packetSize, &hostname, true);
+			hostname1.store(hostname);
+			printf("%s: Hostname: %s; Result: %d\n", modeStr[mode], hostname, result);
+			if (result > 0) {
+				tlsResult = result;
+				hostname1 = hostname;
+				printf("Yay!!!!!!!!\n");
+				if ((k = (send(to_sock, buf, l, 0))) == -1) {
+					printf("%s: Breaking %d\n", modeStr[mode], k);
+				}
+			}
 		}
 		if (httpVer != -2) {
 			if (mode == 0) {  // If we are C->P
@@ -222,8 +238,7 @@ void* pipe_data(void* arg) {
 					printf("%s: Ending for HTTP/1.0 %d\n", modeStr[mode], k);
 					break;
 				} else {
-					printf("%s: Continuing for HTTP/1.1 %d\n", modeStr[mode],
-							k);
+					printf("%s: Continuing for HTTP/1.1 %d\n", modeStr[mode], k);
 				}
 			} else {
 				// Detect and report http version
@@ -234,17 +249,6 @@ void* pipe_data(void* arg) {
 					printf("%s: Using HTTP/1.1\n", modeStr[mode]);
 					httpVer = 1;
 				}
-			}
-		}
-		if(mode == 0 && tlsResult == -255){
-			char* hostname;
-			int result = parse_tls_header(packet, packetSize, &hostname);
-			hostname1.store(hostname);
-			printf("%s: Hostname: %s; Result: %d\n", modeStr[mode], hostname, result);
-			if(result > 0){
-				tlsResult = result;
-				hostname1 = hostname;
-				printf("Yay!!!!!!!!\n");
 			}
 		}
 	}
@@ -259,16 +263,14 @@ int wrap_https_connection(int proxy_fd, const char* dst_host, int dst_port) {
 	char buf[HTTPSHDRBUFSZ];
 
 	printf("CONNECT %s:%d HTTP/1.1\r\nHost: %s\r\n\r\n", dst_host, dst_port, dst_host);
-	snprintf(buf, sizeof(buf), "CONNECT %s:%d HTTP/1.1\r\nHost: %s\r\n\r\n",
-			dst_host, dst_port, dst_host);
+	snprintf(buf, sizeof(buf), "CONNECT %s:%d HTTP/1.1\r\nHost: %s\r\n\r\n", dst_host, dst_port, dst_host);
 	if (send(proxy_fd, buf, strlen(buf), 0) == -1) {
 		if (VERBOSITY)
 			printf("Error writing to https proxy connection\n");
 		return -1;
 	}
 	recv(proxy_fd, buf, sizeof(buf), 0);
-	if ((strncmp(buf, "HTTP/1.0 200", 12) != 0)
-			&& (strncmp(buf, "HTTP/1.1 200", 12) != 0)) {
+	if ((strncmp(buf, "HTTP/1.0 200", 12) != 0) && (strncmp(buf, "HTTP/1.1 200", 12) != 0)) {
 		buf[sizeof(buf) - 1] = '\0';
 		if (VERBOSITY)
 			printf("HTTPS wrapping failed : %s\n", buf);
@@ -301,15 +303,12 @@ void* handle_connection(void* sock_arg) {
 		return NULL;
 	}
 	if (VERBOSITY > 1)
-		printf("Connection from %s:%d for %s:%d\n", peer_name, peer_port,
-				dst_host, dst_port);
+		printf("Connection from %s:%d for %s:%d\n", peer_name, peer_port, dst_host, dst_port);
 	printf("0.-1\n");
 // Proxy Socket
-	int psock = socket(proxy_servinfo->ai_family, proxy_servinfo->ai_socktype,
-			proxy_servinfo->ai_protocol);
+	int psock = socket(proxy_servinfo->ai_family, proxy_servinfo->ai_socktype, proxy_servinfo->ai_protocol);
 	printf("0\n");
-	if (connect(psock, proxy_servinfo->ai_addr, proxy_servinfo->ai_addrlen)
-			!= 0) {
+	if (connect(psock, proxy_servinfo->ai_addr, proxy_servinfo->ai_addrlen) != 0) {
 		printf("0.1\n");
 		if (VERBOSITY)
 			perror("Cannot connect to proxy server");
@@ -328,7 +327,7 @@ void* handle_connection(void* sock_arg) {
 	if (dst_port == 443) {
 		httpVer = -2;
 
-		/*struct timespec tim, tim2;
+		struct timespec tim, tim2;
 		tim.tv_sec = 0;
 		tim.tv_nsec = 500000000L;
 		printf("HTTP wait started\n");
@@ -336,9 +335,9 @@ void* handle_connection(void* sock_arg) {
 			if (nanosleep(&tim, &tim2) < 0) {
 				printf("Nano sleep system call failed \n");
 			}
-		}*/
+		}
 
-		if (wrap_https_connection(psock, dst_host, dst_port) == -1) {
+		if (wrap_https_connection(psock, hostname1.load(), dst_port) == -1) {
 			close(psock);
 			close(sock);
 			return NULL;
@@ -353,8 +352,7 @@ void* handle_connection(void* sock_arg) {
 	close(psock);
 	close(sock);
 	if (VERBOSITY > 1)
-		printf("Closed connection from %s:%d to %s:%d\n", peer_name, peer_port,
-				dst_host, dst_port);
+		printf("Closed connection from %s:%d to %s:%d\n", peer_name, peer_port, dst_host, dst_port);
 	return NULL;
 }
 
@@ -371,10 +369,9 @@ void init() {
 
 int main(int argc, char** argv) {
 	httpVer = -1;
-	printf(
-			"This program is distributed in the hope that it will be useful, but "
-					"WITHOUT ANY "
-					"WARRANTY\n");
+	printf("This program is distributed in the hope that it will be useful, but "
+			"WITHOUT ANY "
+			"WARRANTY\n");
 	init();
 	parse_commandline(argc, argv);
 	int sockfd, new_fd;  // listen on sock_fd, new connection on new_fd
@@ -396,14 +393,12 @@ int main(int argc, char** argv) {
 
 // loop through all the results and bind to the first we can
 	for (p = servinfo; p != NULL; p = p->ai_next) {
-		if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol))
-				== -1) {
+		if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
 			perror("tproxy failed to create socket");
 			continue;
 		}
 
-		if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int))
-				== -1) {
+		if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
 			perror("tproxy failed to setsockopt");
 			exit(1);
 		}
@@ -429,8 +424,7 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 
-	printf("Listening on port : %s , secondary proxy : %s:%s\n", PORT,
-			PROXY_HOST, PROXY_PORT);
+	printf("Listening on port : %s , secondary proxy : %s:%s\n", PORT, PROXY_HOST, PROXY_PORT);
 	printf("server: waiting for connections...\n");
 
 	while (1) {  // main accept() loop
@@ -442,8 +436,7 @@ int main(int argc, char** argv) {
 			continue;
 		}
 		pthread_t tmp_thread;
-		pthread_create(&tmp_thread, NULL, handle_connection,
-				(void*) (long) (new_fd));
+		pthread_create(&tmp_thread, NULL, handle_connection, (void*) (long) (new_fd));
 	}
 
 	return 0;
@@ -479,8 +472,7 @@ static const char tls_alert[] = { 0x15, /* TLS Alert */
  *  -4   - malloc failure
  *  < -4 - Invalid TLS client hello
  */
-static int parse_tls_header(const char *data, size_t data_len,
-		char **hostname) {
+static int parse_tls_header(const char *data, size_t data_len, char **hostname, bool ignoreLen = false) {
 	printf("d0\n");
 	char tls_content_type;
 	char tls_version_major;
@@ -516,19 +508,17 @@ static int parse_tls_header(const char *data, size_t data_len,
 	tls_version_major = data[1];
 	tls_version_minor = data[2];
 	if (tls_version_major < 3) {
-		printf("Received SSL %d.%d handshake which can not support SNI.\n",
-				tls_version_major, tls_version_minor);
+		printf("Received SSL %d.%d handshake which can not support SNI.\n", tls_version_major, tls_version_minor);
 
 		return -2;
 	}
 
 	/* TLS record length */
-	len = ((unsigned char) data[3] << 8) + (unsigned char) data[4]
-			+ TLS_HEADER_LEN;
+	len = ((unsigned char) data[3] << 8) + (unsigned char) data[4] + TLS_HEADER_LEN;
 	data_len = MIN(data_len, len);
 
 	/* Check we received entire TLS record length */
-	if (data_len < len)
+	if (data_len < len && ignoreLen == false)
 		return -1;
 
 	/*
@@ -586,16 +576,14 @@ static int parse_tls_header(const char *data, size_t data_len,
 	return parse_extensions(data + pos, len, hostname);
 }
 
-static int parse_extensions(const char *data, size_t data_len,
-		char **hostname) {
+static int parse_extensions(const char *data, size_t data_len, char **hostname) {
 	size_t pos = 0;
 	size_t len;
 
 	/* Parse each 4 bytes for the extension header */
 	while (pos + 4 <= data_len) {
 		/* Extension Length */
-		len = ((unsigned char) data[pos + 2] << 8)
-				+ (unsigned char) data[pos + 3];
+		len = ((unsigned char) data[pos + 2] << 8) + (unsigned char) data[pos + 3];
 
 		/* Check if it's a server name extension */
 		if (data[pos] == 0x00 && data[pos + 1] == 0x00) {
@@ -614,33 +602,31 @@ static int parse_extensions(const char *data, size_t data_len,
 	return -2;
 }
 
-static int parse_server_name_extension(const char *data, size_t data_len,
-		char **hostname) {
+static int parse_server_name_extension(const char *data, size_t data_len, char **hostname) {
 	size_t pos = 2; /* skip server name list length */
 	size_t len;
 
 	while (pos + 3 < data_len) {
-		len = ((unsigned char) data[pos + 1] << 8)
-				+ (unsigned char) data[pos + 2];
+		len = ((unsigned char) data[pos + 1] << 8) + (unsigned char) data[pos + 2];
 
 		if (pos + 3 + len > data_len)
 			return -5;
 
 		switch (data[pos]) { /* name type */
-		case 0x00: /* host_name */
-			*hostname = (char*) malloc(len + 1);
-			if (*hostname == NULL) {
-				printf("malloc() failure\n");
-				return -4;
-			}
+			case 0x00: /* host_name */
+				*hostname = (char*) malloc(len + 1);
+				if (*hostname == NULL) {
+					printf("malloc() failure\n");
+					return -4;
+				}
 
-			strncpy(*hostname, data + pos + 3, len);
+				strncpy(*hostname, data + pos + 3, len);
 
-			(*hostname)[len] = '\0';
+				(*hostname)[len] = '\0';
 
-			return len;
-		default:
-			printf("Unknown server name extension name type: %d\n", data[pos]);
+				return len;
+			default:
+				printf("Unknown server name extension name type: %d\n", data[pos]);
 		}
 		pos += 3 + len;
 	}
